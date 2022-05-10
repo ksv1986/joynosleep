@@ -64,6 +64,13 @@ class ScreenSaverHandler:
         self.timer = Timer(self.timeout, self.uninhibit)
         self.timer.start()
 
+    def probe(self, device):
+        devname = device.device_node
+        if devname and devname.startswith('/dev/input/event'):
+            logging.debug(device)
+            logging.info(f'{device.device_node} {device.parent.properties["NAME"]}')
+            self.start(device)
+
     def start(self, device):
         t = Thread(target=device_loop, args=(self, device))
         self.devices[device.device_node] = t
@@ -107,11 +114,8 @@ def main():
     handler = ScreenSaverHandler()
 
     for device in handler.udev.list_devices(subsystem='input', ID_INPUT_JOYSTICK='1'):
-        devname = device.device_node
-        if devname and devname.startswith('/dev/input/event'):
-            logging.debug(device)
-            logging.info(f'{device.device_node} {device.parent.properties["NAME"]}')
-            handler.start(device)
+        handler.probe(device)
+
     handler.wait()
     logging.info(f'exit')
 
