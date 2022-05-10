@@ -86,6 +86,11 @@ class ScreenSaverHandler:
             self.timer.cancel()
         self.event.set()
 
+    def run(self):
+        for device in self.udev.list_devices(subsystem='input', ID_INPUT_JOYSTICK='1'):
+            self.probe(device)
+        self.wait()
+
     def wait(self):
         self.event.wait()
 
@@ -112,11 +117,8 @@ def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
     handler = ScreenSaverHandler()
+    handler.run()
 
-    for device in handler.udev.list_devices(subsystem='input', ID_INPUT_JOYSTICK='1'):
-        handler.probe(device)
-
-    handler.wait()
     logging.info(f'exit')
 
 
