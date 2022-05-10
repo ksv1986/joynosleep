@@ -5,6 +5,7 @@ import pyudev
 import dbus
 import struct
 import signal
+from time import sleep
 from threading import Event, Timer, Thread, current_thread
 
 
@@ -45,7 +46,16 @@ class ScreenSaverHandler:
 
     def __init__(self):
         iface = 'org.freedesktop.ScreenSaver'
-        self.saver = dbus.Interface(dbus.SessionBus().get_object(iface, '/ScreenSaver'), dbus_interface=iface)
+        while True:
+            try:
+                self.saver = dbus.Interface(dbus.SessionBus().get_object(iface, '/ScreenSaver'), dbus_interface=iface)
+                break
+            except dbus.exceptions.DBusException as ex:
+                repeat = 2
+                logging.debug(f'dbus exception: {ex}')
+                logging.debug(f'will repeat in {repeat} seconds')
+                sleep(repeat)
+
         self.udev = pyudev.Context()
         monitor = pyudev.Monitor.from_netlink(self.udev)
         monitor.filter_by(subsystem='input')
