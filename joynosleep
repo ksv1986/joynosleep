@@ -4,6 +4,7 @@ import logging
 import pyudev
 import dbus
 import struct
+import signal
 from threading import Timer
 
 
@@ -36,14 +37,19 @@ class ScreenSaverHandler:
     saver = None
     timer = None
     udev = None
+    stopped = False
     timeout = TIMEOUT
 
     def __init__(self):
         iface = 'org.freedesktop.ScreenSaver'
         self.saver = dbus.Interface(dbus.SessionBus().get_object(iface, '/ScreenSaver'), dbus_interface=iface)
         self.udev = pyudev.Context()
+        ScreenSaverHandler.instance = self
+        signal.signal(signal.SIGINT, sigint)
 
     def uninhibit(self):
+        if not self.cookie:
+            return
         self.cookie = self.saver.UnInhibit(self.cookie)
         logging.info('screen saver resumed')
 
@@ -56,6 +62,12 @@ class ScreenSaverHandler:
         self.timer = Timer(self.timeout, self.uninhibit)
         self.timer.start()
 
+    def stop(self):
+        self.stopped = True
+        self.uninhibit()
+        if self.timer:
+            self.timer.cancel()
+
 
 def is_button_up(e):
     return e[2] == EV_KEY and e[4] == 0
@@ -63,7 +75,7 @@ def is_button_up(e):
 
 def device_loop(handler, device):
     with open(device.device_node, 'rb') as f:
-        while True:
+        while not handler.stopped:
             data = f.read(event_len)
             if not data: break
             e = event_unpack(data)
@@ -71,16 +83,22 @@ def device_loop(handler, device):
                 handler.inhibit()
 
 
+def sigint(_signum, _frame):
+    ScreenSaverHandler.instance.stop()
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
     handler = ScreenSaverHandler()
+
     for device in handler.udev.list_devices(subsystem='input', ID_INPUT_JOYSTICK='1'):
         devname = device.device_node
         if devname and devname.startswith('/dev/input/event'):
             logging.debug(device)
             logging.info(f'{device.device_node} {device.parent.properties["NAME"]}')
             device_loop(handler, device)
+    logging.info(f'exit')
 
 
 if __name__ == "__main__":
