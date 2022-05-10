@@ -5,7 +5,7 @@ import pyudev
 import dbus
 import struct
 import signal
-from threading import Event, Timer, Thread
+from threading import Event, Timer, Thread, current_thread
 
 
 """
@@ -37,15 +37,20 @@ class ScreenSaverHandler:
     saver = None
     timer = None
     udev = None
+    observer = None
     event = Event()
-    stopped = False
     devices = {}
     timeout = TIMEOUT
+    name = 'joysuspend'
 
     def __init__(self):
         iface = 'org.freedesktop.ScreenSaver'
         self.saver = dbus.Interface(dbus.SessionBus().get_object(iface, '/ScreenSaver'), dbus_interface=iface)
         self.udev = pyudev.Context()
+        monitor = pyudev.Monitor.from_netlink(self.udev)
+        monitor.filter_by(subsystem='input')
+        self.observer = pyudev.MonitorObserver(monitor, callback=device_callback, name=self.name)
+
         ScreenSaverHandler.instance = self
         signal.signal(signal.SIGINT, sigint)
 
@@ -56,7 +61,7 @@ class ScreenSaverHandler:
         logging.info('screen saver resumed')
 
     def inhibit(self):
-        self.cookie = self.cookie or self.saver.Inhibit("joysuspend", "joy pressed")
+        self.cookie = self.cookie or self.saver.Inhibit(self.name, "joy pressed")
         logging.info(f'screen saver inhibited for {self.timeout} seconds')
 
         if self.timer:
@@ -65,19 +70,33 @@ class ScreenSaverHandler:
         self.timer.start()
 
     def probe(self, device):
+        if not device.properties.get('ID_INPUT_JOYSTICK', None):
+            return
+
         devname = device.device_node
         if devname and devname.startswith('/dev/input/event'):
-            logging.debug(device)
-            logging.info(f'{device.device_node} {device.parent.properties["NAME"]}')
-            self.start(device)
+            self.add(device)
 
-    def start(self, device):
+    def add(self, device):
         t = Thread(target=device_loop, args=(self, device))
         self.devices[device.device_node] = t
+        t.stopped = False
         t.start()
 
+    def remove(self, device):
+        t = self.devices.pop(device.device_node, None)
+        if not t:
+            return
+
+        logging.info(f'removing {device.device_node}')
+        t.stopped = True
+        t.join()
+
     def stop(self):
-        self.stopped = True
+        self.observer.stop()
+
+        for t in self.devices.values():
+            t.stopped = True
         for t in self.devices.values():
             t.join()
 
@@ -87,12 +106,24 @@ class ScreenSaverHandler:
         self.event.set()
 
     def run(self):
-        for device in self.udev.list_devices(subsystem='input', ID_INPUT_JOYSTICK='1'):
+        for device in self.udev.list_devices(subsystem='input'):
             self.probe(device)
+
+        self.observer.start()
         self.wait()
 
     def wait(self):
         self.event.wait()
+
+
+def device_callback(device):
+    logging.debug(f'cb {device.action} {device.device_node}')
+
+    handler = ScreenSaverHandler.instance
+    if device.action == 'remove':
+        handler.remove(device)
+    elif device.action == 'add':
+        handler.probe(device)
 
 
 def is_button_up(e):
@@ -101,12 +132,18 @@ def is_button_up(e):
 
 def device_loop(handler, device):
     with open(device.device_node, 'rb') as f:
-        while not handler.stopped:
-            data = f.read(event_len)
-            if not data: break
-            e = event_unpack(data)
-            if is_button_up(e):
-                handler.inhibit()
+        t = current_thread()
+        logging.debug(device)
+        logging.info(f'{device.device_node} {device.parent.properties["NAME"]}')
+        try:
+            while not t.stopped:
+                data = f.read(event_len)
+                if not data: break
+                e = event_unpack(data)
+                if is_button_up(e):
+                    handler.inhibit()
+        except OSError as ex:
+            logging.debug(f'{device.device_node}: exception {ex}')
 
 
 def sigint(_signum, _frame):
