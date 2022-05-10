@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+
+import pyudev
+import dbus
+import struct
+from threading import Timer
+
+
+"""
+struct timeval {
+    time_t          tv_sec;
+    suseconds_t     tv_usec;
+};
+
+struct input_event {
+	struct timeval time;
+	unsigned short type;
+	unsigned short code;
+	unsigned int value;
+};
+"""
+event_fmt = '@QQHHI'
+event_len = struct.calcsize(event_fmt)
+event_unpack = struct.Struct(event_fmt).unpack_from
+
+
+EV_KEY=1 # when any button is pressed on joystick, inhibit screen saver
+EV_ABS=3 # ignore axis moves, since joystick could generate noise even when not touched
+
+COOKIE=None
+SAVER=None
+TIMER=None
+TIMEOUT=600
+
+
+def uninhibit():
+    global COOKIE
+    COOKIE = SAVER.UnInhibit(COOKIE)
+    print('screen saver resumed')
+
+
+def inhibit():
+    global COOKIE
+    global TIMER
+
+    COOKIE = COOKIE or SAVER.Inhibit("joysuspend", "joy pressed")
+    print(f'screen saver inhibited for {TIMEOUT} seconds', COOKIE)
+    if TIMER:
+        TIMER.cancel()
+    TIMER=Timer(TIMEOUT, uninhibit)
+    TIMER.start()
+
+
+def device_loop(device):
+    with open(device.device_node, 'rb') as f:
+        while True:
+            data = f.read(event_len)
+            if not data: break
+            s = event_unpack(data)
+            if s[2] == EV_KEY:
+                inhibit()
+
+
+def main():
+    global SAVER
+
+    bus = dbus.SessionBus()
+    obj = bus.get_object('org.freedesktop.ScreenSaver', '/ScreenSaver')
+    SAVER = dbus.Interface(obj, dbus_interface='org.freedesktop.ScreenSaver')
+
+    context = pyudev.Context()
+    for device in context.list_devices(subsystem='input', ID_INPUT_JOYSTICK='1'):
+        devname = device.device_node
+        if devname and devname.startswith('/dev/input/event'):
+            print(device)
+            print(device.device_node)
+            print(device.parent.properties['NAME'])
+            device_loop(device)
+
+
+if __name__ == "__main__":
+    main()
