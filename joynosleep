@@ -28,56 +28,59 @@ event_unpack = struct.Struct(event_fmt).unpack_from
 EV_KEY=1 # when any button is pressed on joystick, inhibit screen saver
 EV_ABS=3 # ignore axis moves, since joystick could generate noise even when not touched
 
-COOKIE=None
-SAVER=None
-TIMER=None
 TIMEOUT=600
 
 
-def uninhibit():
-    global COOKIE
-    COOKIE = SAVER.UnInhibit(COOKIE)
-    logging.info('screen saver resumed')
+class ScreenSaverHandler:
+    cookie = None
+    saver = None
+    timer = None
+    udev = None
+    timeout = TIMEOUT
+
+    def __init__(self):
+        iface = 'org.freedesktop.ScreenSaver'
+        self.saver = dbus.Interface(dbus.SessionBus().get_object(iface, '/ScreenSaver'), dbus_interface=iface)
+        self.udev = pyudev.Context()
+
+    def uninhibit(self):
+        self.cookie = self.saver.UnInhibit(self.cookie)
+        logging.info('screen saver resumed')
+
+    def inhibit(self):
+        self.cookie = self.cookie or self.saver.Inhibit("joysuspend", "joy pressed")
+        logging.info(f'screen saver inhibited for {self.timeout} seconds')
+
+        if self.timer:
+            self.timer.cancel()
+        self.timer = Timer(self.timeout, self.uninhibit)
+        self.timer.start()
 
 
-def inhibit():
-    global COOKIE
-    global TIMER
-
-    COOKIE = COOKIE or SAVER.Inhibit("joysuspend", "joy pressed")
-    logging.info(f'screen saver inhibited for {TIMEOUT} seconds')
-    if TIMER:
-        TIMER.cancel()
-    TIMER=Timer(TIMEOUT, uninhibit)
-    TIMER.start()
+def is_button_up(e):
+    return e[2] == EV_KEY and e[4] == 0
 
 
-def device_loop(device):
+def device_loop(handler, device):
     with open(device.device_node, 'rb') as f:
         while True:
             data = f.read(event_len)
             if not data: break
-            s = event_unpack(data)
-            if s[2] == EV_KEY:
-                inhibit()
+            e = event_unpack(data)
+            if is_button_up(e):
+                handler.inhibit()
 
 
 def main():
-    global SAVER
-
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-    bus = dbus.SessionBus()
-    obj = bus.get_object('org.freedesktop.ScreenSaver', '/ScreenSaver')
-    SAVER = dbus.Interface(obj, dbus_interface='org.freedesktop.ScreenSaver')
-
-    context = pyudev.Context()
-    for device in context.list_devices(subsystem='input', ID_INPUT_JOYSTICK='1'):
+    handler = ScreenSaverHandler()
+    for device in handler.udev.list_devices(subsystem='input', ID_INPUT_JOYSTICK='1'):
         devname = device.device_node
         if devname and devname.startswith('/dev/input/event'):
             logging.debug(device)
             logging.info(f'{device.device_node} {device.parent.properties["NAME"]}')
-            device_loop(device)
+            device_loop(handler, device)
 
 
 if __name__ == "__main__":
