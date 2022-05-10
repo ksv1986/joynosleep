@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import logging
 import pyudev
 import dbus
 import struct
@@ -36,7 +37,7 @@ TIMEOUT=600
 def uninhibit():
     global COOKIE
     COOKIE = SAVER.UnInhibit(COOKIE)
-    print('screen saver resumed')
+    logging.info('screen saver resumed')
 
 
 def inhibit():
@@ -44,7 +45,7 @@ def inhibit():
     global TIMER
 
     COOKIE = COOKIE or SAVER.Inhibit("joysuspend", "joy pressed")
-    print(f'screen saver inhibited for {TIMEOUT} seconds', COOKIE)
+    logging.info(f'screen saver inhibited for {TIMEOUT} seconds')
     if TIMER:
         TIMER.cancel()
     TIMER=Timer(TIMEOUT, uninhibit)
@@ -64,6 +65,8 @@ def device_loop(device):
 def main():
     global SAVER
 
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
     bus = dbus.SessionBus()
     obj = bus.get_object('org.freedesktop.ScreenSaver', '/ScreenSaver')
     SAVER = dbus.Interface(obj, dbus_interface='org.freedesktop.ScreenSaver')
@@ -72,9 +75,8 @@ def main():
     for device in context.list_devices(subsystem='input', ID_INPUT_JOYSTICK='1'):
         devname = device.device_node
         if devname and devname.startswith('/dev/input/event'):
-            print(device)
-            print(device.device_node)
-            print(device.parent.properties['NAME'])
+            logging.debug(device)
+            logging.info(f'{device.device_node} {device.parent.properties["NAME"]}')
             device_loop(device)
 
 
