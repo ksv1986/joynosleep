@@ -1,0 +1,10 @@
+[Unit]
+Description=Inhibit screen saver when joystick buttons are pressed
+After=dbus.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/joynosleep
+
+[Install]
+WantedBy=default.target
