@@ -71,8 +71,10 @@ class ScreenSaverHandler:
         logging.info('screen saver resumed')
 
     def inhibit(self):
+        first = not self.cookie
         self.cookie = self.cookie or self.saver.Inhibit(self.name, "joy pressed")
-        logging.info(f'screen saver inhibited for {self.timeout} seconds')
+        if first:
+            logging.info(f'screen saver inhibited for {self.timeout} seconds')
 
         if self.timer:
             self.timer.cancel()
