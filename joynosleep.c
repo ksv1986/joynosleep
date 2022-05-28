@@ -8,6 +8,9 @@
 #define SAVER       "org.freedesktop.ScreenSaver"
 #define SAVER_PATH  "/org/freedesktop/ScreenSaver"
 
+#define DBUS        "org.freedesktop.DBus"
+#define DBUS_PATH   "/org/freedesktop/DBus"
+
 #define cleanup(f) __attribute__((cleanup(f)))
 
 static int
@@ -57,7 +60,7 @@ saver_inhibit(sd_bus *bus, const char *reason, uint32_t *cookie) {
 
     r = sd_bus_message_read_basic(reply, 'u', cookie);
     if (r < 0)
-        return log_error(r, "Failed to read reply");
+        return log_error(r, "Failed to read Inhibit reply");
 
     printf("screen saver inhibited; cookie=%u\n", *cookie);
     return 0;
@@ -83,9 +86,35 @@ saver_uninhibit(sd_bus *bus, uint32_t *cookie) {
 }
 
 static int
+saver_is_active(sd_bus *bus) {
+    cleanup(sd_bus_message_unrefp) sd_bus_message *reply = NULL;
+    int r;
+
+    r = dbus_call(bus, &reply, DBUS, DBUS_PATH, DBUS, "NameHasOwner",
+        "s", SAVER);
+    if (r < 0)
+        return r;
+
+    int v;
+    r = sd_bus_message_read_basic(reply, 'b', &v);
+    if (r < 0)
+        return log_error(r, "Failed to read NameHasOwner reply");
+
+    printf("screensaver is %s\n", v ? "active" : "not active");
+    return v;
+}
+
+static int
 start(sd_bus *bus) {
     int r;
     uint32_t cookie = 0;
+
+    r = saver_is_active(bus);
+    if (r < 0)
+        return r;
+
+    if (!r)
+        return 1;
 
     r = saver_inhibit(bus, "test", &cookie);
     if (r < 0)
