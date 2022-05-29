@@ -327,6 +327,18 @@ on_screen_saver_appeared(sd_bus *bus) {
 
 static int
 on_screen_saver_disappeared(unused sd_bus *bus) {
+    int r;
+
+    if (g_cookie) {
+        printf("stale cookie %u\n", g_cookie);
+        g_cookie = 0;
+
+        r = sd_event_source_set_enabled(g_timer, SD_EVENT_OFF);
+        assert(r >= 0);
+    }
+
+    // screen saver is gone, no need to read joysticks
+    joystick_del_all();
     return 0;
 }
 
@@ -355,7 +367,7 @@ on_name_owner_changed(sd_bus_message *m,
 }
 
 static int
-wait_for_screen_saver(sd_bus *bus) {
+watch_screen_saver(sd_bus *bus) {
     int r;
 
     r = sd_bus_match_signal(bus, NULL, DBUS, DBUS_PATH, DBUS, "NameOwnerChanged",
@@ -363,7 +375,6 @@ wait_for_screen_saver(sd_bus *bus) {
     if (r < 0)
         log_error(r, "Failed to add NameOwnerChanged match");
 
-    printf("waiting for screen saver to appear...\n");
     return 0;
 }
 
@@ -376,9 +387,11 @@ start(sd_bus *bus) {
         return r;
 
     if (r)
-        return on_screen_saver_appeared(bus);
+        on_screen_saver_appeared(bus);
     else
-        return wait_for_screen_saver(bus);
+        printf("waiting for screen saver to appear...\n");
+
+    return watch_screen_saver(bus);
 }
 
 static int
