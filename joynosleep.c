@@ -153,6 +153,23 @@ bus_init(sd_event_source *s, unused void *userdata) {
     return 0;
 }
 
+static void
+signal_init(sd_event *ev) {
+    int r;
+    sigset_t s;
+
+    sigemptyset(&s);
+    sigaddset(&s, SIGINT);
+    sigaddset(&s, SIGTERM);
+    sigprocmask(SIG_BLOCK, &s, NULL);
+
+    // Stop event loop on a signal, exit handlers will take care of allocated resources
+    r = sd_event_add_signal(ev, NULL, SIGINT, NULL, NULL);
+    assert(r >= 0);
+    r = sd_event_add_signal(ev, NULL, SIGTERM, NULL, NULL);
+    assert(r >= 0);
+}
+
 int
 main(int argc, char **argv) {
     if (argc != 1) {
@@ -166,6 +183,8 @@ main(int argc, char **argv) {
     r = sd_event_default(&ev);
     if (r < 0)
         return log_error(r, "Failed to allocate event loop");
+
+    signal_init(ev);
 
     r = sd_event_add_defer(ev, NULL, bus_init, NULL);
     if (r < 0)
