@@ -1,5 +1,7 @@
 #include <systemd/sd-bus.h>
+#include <systemd/sd-event.h>
 
+#include <assert.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <strings.h>
@@ -12,6 +14,7 @@
 #define DBUS_PATH   "/org/freedesktop/DBus"
 
 #define cleanup(f) __attribute__((cleanup(f)))
+#define unused __attribute__ ((unused))
 
 static int
 log_error(int error, const char *message) {
@@ -123,6 +126,33 @@ start(sd_bus *bus) {
     return saver_uninhibit(bus, &cookie);
 }
 
+static int
+bus_fini(unused sd_event_source *s, void *userdata) {
+    sd_bus *bus = userdata;
+    sd_bus_unref(bus);
+    return 0;
+}
+
+static int
+bus_init(sd_event_source *s, unused void *userdata) {
+    int r;
+
+    sd_bus *bus = NULL;
+    r = sd_bus_default_user(&bus);
+    if (r < 0)
+        return log_error(r, "Can't connect do D-Bus");
+
+    sd_event *ev = sd_event_source_get_event(s);
+    r = sd_event_add_exit(ev, NULL, bus_fini, bus);
+    assert(r >= 0);
+
+    start(bus);
+
+    r = sd_event_exit(ev, r);
+    assert(r >= 0);
+    return 0;
+}
+
 int
 main(int argc, char **argv) {
     if (argc != 1) {
@@ -130,13 +160,16 @@ main(int argc, char **argv) {
         return 1;
     }
 
-    cleanup(sd_bus_unrefp) sd_bus *bus = NULL;
+    cleanup(sd_event_unrefp) sd_event *ev = NULL;
     int r;
 
-    r = sd_bus_default_user(&bus);
+    r = sd_event_default(&ev);
     if (r < 0)
-        return log_error(r, "Can't connect do D-Bus");
+        return log_error(r, "Failed to allocate event loop");
 
-    r = start(bus);
-    return r;
+    r = sd_event_add_defer(ev, NULL, bus_init, NULL);
+    if (r < 0)
+        return log_error(r, "Failed to add event loop job");
+
+    return sd_event_loop(ev);
 }
