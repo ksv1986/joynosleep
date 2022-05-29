@@ -35,6 +35,7 @@ typedef struct joystick {
 } joystick;
 
 static sd_bus *g_bus;
+static sd_device_monitor *g_monitor;
 static uint32_t g_cookie;
 
 static const uint64_t accuracy    =  60000000; //  1min
@@ -318,10 +319,10 @@ on_device_changed(sd_device_monitor *m, sd_device *d, unused void *userdata) {
 }
 
 static int
-joystick_monitor(sd_event *ev) {
+joystick_monitor_init(sd_event *ev) {
     int r;
 
-    sd_device_monitor *m = NULL;
+    cleanup(sd_device_monitor_unrefp) sd_device_monitor *m = NULL;
     r = sd_device_monitor_new(&m);
     if (r < 0)
         return log_error(r, "Failed to init udev monitor");
@@ -334,11 +335,33 @@ joystick_monitor(sd_event *ev) {
     if (r < 0)
         return log_error(r, "Failed to attach udev monitor");
 
-    r = sd_device_monitor_start(m, on_device_changed, NULL);
-    if (r < 0)
-        return log_error(r, "Failed to start udev monitor");
-
+    g_monitor = sd_device_monitor_ref(m);
     return 0;
+}
+
+static void
+joystick_monitor_start(void) {
+    if (!g_monitor)
+        return;
+
+    int r;
+    r = sd_device_monitor_start(g_monitor, on_device_changed, NULL);
+    if (r < 0) {
+        log_error(r, "Failed to start udev monitor");
+        g_monitor = sd_device_monitor_unref(g_monitor);
+    } else
+        printf("started joystick hotplug monitor...\n");
+}
+
+static void
+joystick_monitor_stop(void) {
+    if (!g_monitor)
+        return;
+
+    int r;
+    r = sd_device_monitor_stop(g_monitor);
+    if (r < 0)
+        log_error(r, "Failed to stop udev monitor");
 }
 
 static int
@@ -378,7 +401,9 @@ joystick_enumerate(sd_event *ev) {
 static int
 on_screen_saver_appeared(sd_bus *bus) {
     sd_event *ev = sd_bus_get_event(bus);
-    return joystick_enumerate(ev);
+    int r = joystick_enumerate(ev);
+    joystick_monitor_start();
+    return r;
 }
 
 static int
@@ -394,6 +419,7 @@ on_screen_saver_disappeared(unused sd_bus *bus) {
     }
 
     // screen saver is gone, no need to read joysticks
+    joystick_monitor_stop();
     joystick_del_all();
     return 0;
 }
@@ -442,13 +468,13 @@ start(sd_bus *bus) {
     if (r < 0)
         return r;
 
+    // hotplug monitor is nice to have, but not crytical to fail
+    joystick_monitor_init(sd_bus_get_event(bus));
+
     if (r)
         on_screen_saver_appeared(bus);
     else
         printf("waiting for screen saver to appear...\n");
-
-    // hotplug monitor is nice to have, but not crytical to fail
-    joystick_monitor(sd_bus_get_event(bus));
 
     return watch_screen_saver(bus);
 }
