@@ -214,8 +214,14 @@ on_joystick_read(unused sd_event_source *s, int fd,
 
     struct input_event event[1];
     r = read(fd, event, sizeof(event));
-    if (r != sizeof(event))
-        return log_errorf(-errno, "%s %s read failed", j->name, j->devname);
+    if (r != sizeof(event)) {
+        r = -errno;
+        if (r == -ENODEV) {
+                joystick_del(j);
+                return 0;
+        } else
+                return log_errorf(r, "%s %s read failed", j->name, j->devname);
+    }
 
     ++j->n_events;
     if (!is_button_press(event))
@@ -282,6 +288,56 @@ joystick_del_all(void) {
 static int
 joystick_exit(unused sd_event_source *s, unused void *userdata) {
     joystick_del_all();
+    return 0;
+}
+
+static int
+on_device_changed(sd_device_monitor *m, sd_device *d, unused void *userdata) {
+    int r;
+
+    const char *devname, *name;
+    r = joystick_probe(d, &devname, &name);
+    if (r <= 0)
+        return 0;
+
+    sd_device_action_t a;
+    r = sd_device_get_action(d, &a);
+    assert(r >= 0);
+
+    sd_event *ev = sd_device_monitor_get_event(m);
+    switch (a) {
+        case SD_DEVICE_ADD:
+            joystick_add(ev, d, devname, name);
+            break;
+        case SD_DEVICE_REMOVE:
+            // no need to track device removal:
+            // read() fails with ENODEV first, so it's enough to handle it there
+        default:;
+    }
+    return 0;
+}
+
+static int
+joystick_monitor(sd_event *ev) {
+    int r;
+
+    sd_device_monitor *m = NULL;
+    r = sd_device_monitor_new(&m);
+    if (r < 0)
+        return log_error(r, "Failed to init udev monitor");
+
+    r = sd_device_monitor_filter_add_match_subsystem_devtype(m, "input", NULL);
+    if (r < 0)
+        return log_error(r, "Failed to add subsystem match to udev monitor");
+
+    r = sd_device_monitor_attach_event(m, ev);
+    if (r < 0)
+        return log_error(r, "Failed to attach udev monitor");
+
+    r = sd_device_monitor_start(m, on_device_changed, NULL);
+    if (r < 0)
+        return log_error(r, "Failed to start udev monitor");
+
     return 0;
 }
 
@@ -390,6 +446,9 @@ start(sd_bus *bus) {
         on_screen_saver_appeared(bus);
     else
         printf("waiting for screen saver to appear...\n");
+
+    // hotplug monitor is nice to have, but not crytical to fail
+    joystick_monitor(sd_bus_get_event(bus));
 
     return watch_screen_saver(bus);
 }
