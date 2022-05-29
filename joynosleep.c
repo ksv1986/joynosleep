@@ -108,22 +108,71 @@ saver_is_active(sd_bus *bus) {
 }
 
 static int
-start(sd_bus *bus) {
+on_screen_saver_appeared(sd_bus *bus) {
     int r;
+
     uint32_t cookie = 0;
-
-    r = saver_is_active(bus);
-    if (r < 0)
-        return r;
-
-    if (!r)
-        return 1;
-
     r = saver_inhibit(bus, "test", &cookie);
     if (r < 0)
         return r;
 
     return saver_uninhibit(bus, &cookie);
+}
+
+static int
+on_screen_saver_disappeared(unused sd_bus *bus) {
+    return 0;
+}
+
+static int
+on_name_owner_changed(sd_bus_message *m,
+    unused void *userdata,
+    unused sd_bus_error *ret_error)
+{
+    int r;
+    const char *name, *old_owner, *new_owner;
+    r = sd_bus_message_read(m, "sss", &name, &old_owner, &new_owner);
+    if (r < 0)
+        return log_error(r, "Failed to read NameOwnerChanged reply");
+
+    if (strcmp(name, SAVER))
+        return 0;
+
+    sd_bus *bus = sd_bus_message_get_bus(m);
+    if (!new_owner || !new_owner[0]) {
+        printf("screen saver disappeared\n");
+        return on_screen_saver_disappeared(bus);
+    } else {
+        printf("screen saver appeared\n");
+        return on_screen_saver_appeared(bus);
+    }
+}
+
+static int
+wait_for_screen_saver(sd_bus *bus) {
+    int r;
+
+    r = sd_bus_match_signal(bus, NULL, DBUS, DBUS_PATH, DBUS, "NameOwnerChanged",
+        on_name_owner_changed, NULL);
+    if (r < 0)
+        log_error(r, "Failed to add NameOwnerChanged match");
+
+    printf("waiting for screen saver to appear...\n");
+    return 0;
+}
+
+static int
+start(sd_bus *bus) {
+    int r;
+
+    r = saver_is_active(bus);
+    if (r < 0)
+        return r;
+
+    if (r)
+        return on_screen_saver_appeared(bus);
+    else
+        return wait_for_screen_saver(bus);
 }
 
 static int
@@ -146,10 +195,12 @@ bus_init(sd_event_source *s, unused void *userdata) {
     r = sd_event_add_exit(ev, NULL, bus_fini, bus);
     assert(r >= 0);
 
+    r = sd_bus_attach_event(bus, ev, SD_EVENT_PRIORITY_NORMAL);
+    if (r < 0)
+        return log_error(r, "Failed to attach D-Bus to event loop");
+
     start(bus);
 
-    r = sd_event_exit(ev, r);
-    assert(r >= 0);
     return 0;
 }
 
