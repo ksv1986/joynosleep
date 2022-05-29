@@ -1,4 +1,5 @@
 #include <systemd/sd-bus.h>
+#include <systemd/sd-device.h>
 #include <systemd/sd-event.h>
 
 #include <assert.h>
@@ -108,8 +109,77 @@ saver_is_active(sd_bus *bus) {
 }
 
 static int
+joystick_probe(sd_device *d, const char **devname, const char **name) {
+    int r;
+
+    const char *v;
+    r = sd_device_get_property_value(d, "ID_INPUT_JOYSTICK", &v);
+    if (r < 0)
+        return r;
+    if (!v || strcmp(v, "1"))
+        return 0;
+
+    r = sd_device_get_devname(d, &v);
+    if (r < 0)
+        return r;
+
+    static const char event_pfx[] = "/dev/input/event";
+    if (!v || strncmp(v, event_pfx, sizeof(event_pfx)-1))
+        return 0;
+
+    sd_device *parent;
+    r = sd_device_get_parent(d, &parent);
+    if (r < 0)
+        return r;
+
+    *devname = v;
+    r = sd_device_get_property_value(parent, "NAME", name);
+    if (r < 0 || !name || !name[0])
+        *name = v;
+
+    return 1;
+}
+
+static int
+joystick_enumerate(void) {
+    int r;
+
+    cleanup(sd_device_enumerator_unrefp) sd_device_enumerator *e;
+    r = sd_device_enumerator_new(&e);
+    if (r < 0)
+        return log_error(r, "Failed to create device enumerator");
+
+    r = sd_device_enumerator_add_match_subsystem(e, "input", 1);
+    if (r < 0)
+        return log_error(r, "Failed to add subsystem match");
+
+    int inputs = 0, joysticks = 0;
+    sd_device *d;
+    for (d = sd_device_enumerator_get_device_first(e);
+         d;
+         d = sd_device_enumerator_get_device_next(e))
+    {
+        ++inputs;
+        const char *devname, *name;
+        r = joystick_probe(d, &devname, &name);
+        if (r <= 0)
+            continue;
+
+        ++joysticks;
+        printf("%s %s\n", devname, name);
+    }
+
+    printf("Found %d inputs, %d joysticks\n", inputs, joysticks);
+    return 0;
+}
+
+static int
 on_screen_saver_appeared(sd_bus *bus) {
     int r;
+
+    r = joystick_enumerate();
+    if (r < 0)
+        return r;
 
     uint32_t cookie = 0;
     r = saver_inhibit(bus, "test", &cookie);
