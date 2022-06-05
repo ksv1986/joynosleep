@@ -49,6 +49,7 @@ static int
 log_error(int error, const char *message) {
     const int r = -error;
     fprintf(stderr, "%s: %d %s\n", message, r, strerror(r));
+    fflush(stderr);
     return error;
 }
 
@@ -60,7 +61,24 @@ log_errorf(int error, const char *fmt, ...) {
     vfprintf(stderr, fmt, va);
     va_end(va);
     fprintf(stderr, ": %d %s\n", r, strerror(r));
+    fflush(stderr);
     return error;
+}
+
+static void
+log_info(const char *line) {
+    fprintf(stdout, "%s\n", line);
+    fflush(stdout);
+}
+
+static void
+log_infof(const char *fmt, ...) {
+    va_list va;
+    va_start(va, fmt);
+    vfprintf(stdout, fmt, va);
+    va_end(va);
+    fwrite("\n", 1, 1, stdout);
+    fflush(stdout);
 }
 
 static int
@@ -105,7 +123,7 @@ saver_inhibit(sd_bus *bus, const char *reason, uint32_t *cookie) {
     if (r < 0)
         return log_error(r, "Failed to read Inhibit reply");
 
-    printf("screen saver inhibited; cookie=%u\n", *cookie);
+    log_infof("screen saver inhibited; cookie=%u", *cookie);
     return 0;
 }
 
@@ -122,7 +140,7 @@ saver_uninhibit(sd_bus *bus, uint32_t *cookie) {
     if (r < 0)
         return r;
 
-    printf("screen saver restored; cookie=%u\n", *cookie);
+    log_infof("screen saver restored; cookie=%u", *cookie);
     *cookie = 0;
 
     return 0;
@@ -143,7 +161,7 @@ saver_is_active(sd_bus *bus) {
     if (r < 0)
         return log_error(r, "Failed to read NameHasOwner reply");
 
-    printf("screensaver is %s\n", v ? "active" : "not active");
+    log_infof("screensaver is %s", v ? "active" : "not active");
     return v;
 }
 
@@ -196,7 +214,7 @@ joystick_destroy(void *userdata) {
 
 static void
 joystick_del(joystick *j) {
-    printf("-%zd/%zd: %s %s events=%" PRId64 "\n",
+    log_infof("-%zd/%zd: %s %s events=%" PRId64,
         j - g_joysticks, n_joysticks, j->devname, j->name, j->n_events);
     sd_event_source_disable_unref(j->source);
 }
@@ -273,7 +291,7 @@ joystick_add(sd_event *ev, sd_device *d, const char *devname, const char *name) 
     j->name = name;
     j->n_events = 0;
 
-    printf("+%zd: %s %s\n", n_joysticks, devname, name);
+    log_infof("+%zd: %s %s", n_joysticks, devname, name);
     ++n_joysticks;
     return 0;
 }
@@ -350,7 +368,7 @@ joystick_monitor_start(void) {
         log_error(r, "Failed to start udev monitor");
         g_monitor = sd_device_monitor_unref(g_monitor);
     } else
-        printf("started joystick hotplug monitor...\n");
+        log_infof("started joystick hotplug monitor...");
 }
 
 static void
@@ -393,7 +411,7 @@ joystick_enumerate(sd_event *ev) {
         joystick_add(ev, d, devname, name);
     }
 
-    printf("Found %d inputs, %d joysticks, %zd tracked\n",
+    log_infof("Found %d inputs, %d joysticks, %zd tracked",
         inputs, joysticks, n_joysticks);
     return 0;
 }
@@ -411,7 +429,7 @@ on_screen_saver_disappeared(unused sd_bus *bus) {
     int r;
 
     if (g_cookie) {
-        printf("stale cookie %u\n", g_cookie);
+        log_infof("stale cookie %u", g_cookie);
         g_cookie = 0;
 
         r = sd_event_source_set_enabled(g_timer, SD_EVENT_OFF);
@@ -440,10 +458,10 @@ on_name_owner_changed(sd_bus_message *m,
 
     sd_bus *bus = sd_bus_message_get_bus(m);
     if (!new_owner || !new_owner[0]) {
-        printf("screen saver disappeared\n");
+        log_info("screen saver disappeared");
         return on_screen_saver_disappeared(bus);
     } else {
-        printf("screen saver appeared\n");
+        log_info("screen saver appeared");
         return on_screen_saver_appeared(bus);
     }
 }
@@ -474,7 +492,7 @@ start(sd_bus *bus) {
     if (r)
         on_screen_saver_appeared(bus);
     else
-        printf("waiting for screen saver to appear...\n");
+        log_info("waiting for screen saver to appear...");
 
     return watch_screen_saver(bus);
 }
@@ -560,7 +578,7 @@ signal_init(sd_event *ev) {
 int
 main(int argc, char **argv) {
     if (argc != 1) {
-        printf("%s takes no arguments.\n", argv[0]);
+        log_infof("%s takes no arguments", argv[0]);
         return 1;
     }
 
